@@ -760,20 +760,6 @@ static int jpSetDictionaries(lua_State *L) {
     return 1;
 }
 
-// cre.jpSetMinKeep(n): keep at least n letters of a word unit on each side
-// of a column break; 0 turns keeping words together off.
-static int jpSetMinKeep(lua_State *L) {
-    JpWords::setMinKeep(luaL_checkint(L, 1));
-    return 0;
-}
-
-// cre.jpSetKeepIdioms(bool): whether idioms (entries tagged only `exp`)
-// count as one word.
-static int jpSetKeepIdioms(lua_State *L) {
-    JpWords::setKeepIdioms(lua_toboolean(L, 1));
-    return 0;
-}
-
 // cre.jpSegment(text): {words={...}, units={...}, costs={...}}, where
 // costs[i] is the cost (in em) of a break after the i-th char.
 static int jpSegment(lua_State *L) {
@@ -4961,8 +4947,6 @@ static const struct luaL_Reg cre_func[] = {
     {"jpDeinflect", jpDeinflect},
     {"jpConditionFlags", jpConditionFlags},
     {"jpSetDictionaries", jpSetDictionaries},
-    {"jpSetMinKeep", jpSetMinKeep},
-    {"jpSetKeepIdioms", jpSetKeepIdioms},
     {"jpSegment", jpSegment},
     {"renderImageData", renderImageData},
     {"getBalancedHTML", getBalancedHTML},
