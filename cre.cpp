@@ -643,11 +643,11 @@ static int jpSetDeinflectRules(lua_State *L) {
             lua_rawgeti(L, r, 1);
             const char *type = luaL_checkstring(L, -1);
             if ( strcmp(type, "suffix") == 0 )
-                rule.type = JpDeinflector::RULE_SUFFIX;
+                rule.type = JpDeinflector::RuleType::Suffix;
             else if ( strcmp(type, "prefix") == 0 )
-                rule.type = JpDeinflector::RULE_PREFIX;
+                rule.type = JpDeinflector::RuleType::Prefix;
             else
-                rule.type = JpDeinflector::RULE_WHOLE_WORD;
+                rule.type = JpDeinflector::RuleType::WholeWord;
             lua_rawgeti(L, r, 2);
             rule.inflected = jpCheckU32(L, -1);
             lua_rawgeti(L, r, 3);
@@ -726,6 +726,58 @@ static int jpConditionFlags(lua_State *L) {
         ? deinflector.getConditionFlagsFromConditionTypes(list)
         : deinflector.getConditionFlagsFromPartsOfSpeech(list);
     lua_pushinteger(L, (int32_t)flags);
+    return 1;
+}
+
+// cre.jpSetWords(path): load the word list written by the Yomitan plugin's
+// yomitan/wordlist.lua ("" unloads it). Returns the number of keys, or nil
+// when the file cannot be read or is not sorted.
+static int jpSetWords(lua_State *L) {
+    int count = JpWords::setWords(luaL_checkstring(L, 1));
+    if ( count < 0 )
+        lua_pushnil(L);
+    else
+        lua_pushinteger(L, count);
+    return 1;
+}
+
+// cre.jpSetMinKeep(n): keep at least n letters of a word unit on each side
+// of a column break; 0 turns keeping words together off.
+static int jpSetMinKeep(lua_State *L) {
+    JpWords::setMinKeep(luaL_checkint(L, 1));
+    return 0;
+}
+
+// cre.jpSetKeepIdioms(bool): whether idioms (entries tagged only `exp`)
+// count as one word.
+static int jpSetKeepIdioms(lua_State *L) {
+    JpWords::setKeepIdioms(lua_toboolean(L, 1));
+    return 0;
+}
+
+// cre.jpSegment(text): {words={...}, units={...}, costs={...}}, where
+// costs[i] is the cost (in em) of a break after the i-th char.
+static int jpSegment(lua_State *L) {
+    std::u32string text = jpCheckU32(L, 1);
+    const JpSegmentation & seg = JpWords::segment(text);
+    lua_createtable(L, 0, 3);
+    const std::vector<JpSegmentation::Span> * lists[2] = { &seg.words, &seg.units };
+    const char * names[2] = { "words", "units" };
+    for ( int l = 0; l < 2; l++ ) {
+        lua_createtable(L, (int)lists[l]->size(), 0);
+        for ( size_t i = 0; i < lists[l]->size(); i++ ) {
+            const JpSegmentation::Span & span = (*lists[l])[i];
+            jpPushU32(L, text.substr(span.start, span.end - span.start));
+            lua_rawseti(L, -2, (int)i + 1);
+        }
+        lua_setfield(L, -2, names[l]);
+    }
+    lua_createtable(L, (int)text.size(), 0);
+    for ( int k = 1; k < (int)text.size(); k++ ) {
+        lua_pushnumber(L, JpWords::splitCost(seg, k) / 10.0);
+        lua_rawseti(L, -2, k);
+    }
+    lua_setfield(L, -2, "costs");
     return 1;
 }
 
@@ -4889,6 +4941,10 @@ static const struct luaL_Reg cre_func[] = {
     {"jpSetDeinflectRules", jpSetDeinflectRules},
     {"jpDeinflect", jpDeinflect},
     {"jpConditionFlags", jpConditionFlags},
+    {"jpSetWords", jpSetWords},
+    {"jpSetMinKeep", jpSetMinKeep},
+    {"jpSetKeepIdioms", jpSetKeepIdioms},
+    {"jpSegment", jpSegment},
     {"renderImageData", renderImageData},
     {"getBalancedHTML", getBalancedHTML},
     {"smoothScaleBlitBuffer", smoothScaleBlitBuffer},
