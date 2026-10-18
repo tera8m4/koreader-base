@@ -31,6 +31,7 @@ extern "C" {
 #include "lvimg.h"
 #include "lvrend_vert_diag.h"
 #include "lvtextfm_vert_diag.h"
+#include "jpdictionary.h"
 #include "jpwords.h"
 
 static void replaceColor( char * str, lUInt32 color ) {
@@ -729,15 +730,33 @@ static int jpConditionFlags(lua_State *L) {
     return 1;
 }
 
-// cre.jpSetWords(path): load the word list written by the Yomitan plugin's
-// yomitan/wordlist.lua ("" unloads it). Returns the number of keys, or nil
-// when the file cannot be read or is not sorted.
-static int jpSetWords(lua_State *L) {
-    int count = JpWords::setWords(luaL_checkstring(L, 1));
-    if ( count < 0 )
+// cre.jpSetDictionaries(paths): look words up in these Yomitan dictionary
+// databases (dict.sqlite3 files), or in none with an empty list. Returns
+// true, or nil and an error message. The same unchanged databases keep the
+// open connections and their lookup caches.
+static int jpSetDictionaries(lua_State *L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<std::string> paths;
+    jpGetStringList(L, 1, paths);
+    if ( paths.empty() ) {
+        JpWords::setDictionary(NULL);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    const JpDictionary * current = JpWords::getDictionary();
+    if ( current && current->getHash() == getJpSqliteDictionaryHash(paths) ) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    std::string error;
+    JpDictionary * dictionary = newJpSqliteDictionary(paths, error);
+    JpWords::setDictionary(dictionary);
+    if ( !dictionary ) {
         lua_pushnil(L);
-    else
-        lua_pushinteger(L, count);
+        lua_pushstring(L, error.c_str());
+        return 2;
+    }
+    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -4941,7 +4960,7 @@ static const struct luaL_Reg cre_func[] = {
     {"jpSetDeinflectRules", jpSetDeinflectRules},
     {"jpDeinflect", jpDeinflect},
     {"jpConditionFlags", jpConditionFlags},
-    {"jpSetWords", jpSetWords},
+    {"jpSetDictionaries", jpSetDictionaries},
     {"jpSetMinKeep", jpSetMinKeep},
     {"jpSetKeepIdioms", jpSetKeepIdioms},
     {"jpSegment", jpSegment},

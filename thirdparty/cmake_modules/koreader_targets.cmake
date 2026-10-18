@@ -94,8 +94,8 @@ endfunction()
 # koreade-cre
 declare_koreader_target(
     koreader-cre TYPE monolibtic
-    DEPENDS crengine::crengine luajit::luajit
-    SOURCES cre.cpp
+    DEPENDS crengine::crengine luajit::luajit sqlite::sqlite3
+    SOURCES cre.cpp jpdictionary.cpp
     SUFFIX .so
     VISIBILITY hidden
 )
