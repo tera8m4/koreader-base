@@ -1,3 +1,3 @@
 [submodule "kpvcrlib/crengine"]
 	path = thirdparty/kpvcrlib/crengine
-	url = https://github.com/m-tky/crengine.git
+	url = https://github.com/tera8m4/crengine.git
