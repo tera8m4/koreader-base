@@ -31,6 +31,7 @@ extern "C" {
 #include "lvimg.h"
 #include "lvrend_vert_diag.h"
 #include "lvtextfm_vert_diag.h"
+#include "jpwords.h"
 
 static void replaceColor( char * str, lUInt32 color ) {
 	// in line like "0 c #80000000",
@@ -568,6 +569,163 @@ static int softHyphenateText(lua_State *L) {
     // that language, even if hyphenation is disabled in crengine
     lString32 hyphenated_text = lang_cfg->softHyphenateText(utext, true);
     lua_pushstring(L, UnicodeToLocal(hyphenated_text).c_str());
+    return 1;
+}
+
+// Japanese words for line breaking (koreader-tategumi fork, see crengine's
+// jpwords.h). Thin adapters between Lua strings and std::u32string.
+static std::u32string jpCheckU32(lua_State *L, int idx) {
+    size_t len;
+    const char *s = luaL_checklstring(L, idx, &len);
+    lString32 str = Utf8ToUnicode(s, (int)len);
+    return std::u32string(str.c_str(), str.length());
+}
+
+static void jpPushU32(lua_State *L, const std::u32string & s) {
+    lString8 str = UnicodeToUtf8(s.data(), (int)s.size());
+    lua_pushlstring(L, str.c_str(), str.length());
+}
+
+static void jpGetStringList(lua_State *L, int idx, std::vector<std::string> & out) {
+    out.clear();
+    if ( !lua_istable(L, idx) )
+        return;
+    int n = (int)lua_objlen(L, idx);
+    for ( int i = 1; i <= n; i++ ) {
+        lua_rawgeti(L, idx, i);
+        size_t len;
+        const char *s = lua_tolstring(L, -1, &len);
+        if ( s )
+            out.push_back(std::string(s, len));
+        lua_pop(L, 1);
+    }
+}
+
+// cre.jpSetDeinflectRules(descriptor): a transforms descriptor as in the
+// Yomitan plugin's yomitan/data/transforms_ja.lua. Replaces the rules.
+static int jpSetDeinflectRules(lua_State *L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<JpDeinflector::ConditionSpec> conditions;
+    std::vector<JpDeinflector::TransformSpec> transforms;
+    lua_getfield(L, 1, "conditions");
+    int conditions_idx = lua_gettop(L);
+    luaL_checktype(L, conditions_idx, LUA_TTABLE);
+    for ( int i = 1; i <= (int)lua_objlen(L, conditions_idx); i++ ) {
+        lua_rawgeti(L, conditions_idx, i);
+        int c = lua_gettop(L);
+        JpDeinflector::ConditionSpec spec;
+        lua_getfield(L, c, "id");
+        spec.id = luaL_checkstring(L, -1);
+        lua_getfield(L, c, "is_dictionary_form");
+        spec.is_dictionary_form = lua_toboolean(L, -1);
+        lua_getfield(L, c, "sub_conditions");
+        spec.has_sub_conditions = lua_istable(L, -1);
+        jpGetStringList(L, lua_gettop(L), spec.sub_conditions);
+        lua_settop(L, c - 1);
+        conditions.push_back(spec);
+    }
+    lua_getfield(L, 1, "transforms");
+    int transforms_idx = lua_gettop(L);
+    luaL_checktype(L, transforms_idx, LUA_TTABLE);
+    for ( int i = 1; i <= (int)lua_objlen(L, transforms_idx); i++ ) {
+        lua_rawgeti(L, transforms_idx, i);
+        int t = lua_gettop(L);
+        JpDeinflector::TransformSpec spec;
+        lua_getfield(L, t, "id");
+        spec.id = luaL_checkstring(L, -1);
+        lua_getfield(L, t, "rules");
+        int rules_idx = lua_gettop(L);
+        luaL_checktype(L, rules_idx, LUA_TTABLE);
+        for ( int j = 1; j <= (int)lua_objlen(L, rules_idx); j++ ) {
+            lua_rawgeti(L, rules_idx, j);
+            int r = lua_gettop(L);
+            JpDeinflector::RuleSpec rule;
+            lua_rawgeti(L, r, 1);
+            const char *type = luaL_checkstring(L, -1);
+            if ( strcmp(type, "suffix") == 0 )
+                rule.type = JpDeinflector::RULE_SUFFIX;
+            else if ( strcmp(type, "prefix") == 0 )
+                rule.type = JpDeinflector::RULE_PREFIX;
+            else
+                rule.type = JpDeinflector::RULE_WHOLE_WORD;
+            lua_rawgeti(L, r, 2);
+            rule.inflected = jpCheckU32(L, -1);
+            lua_rawgeti(L, r, 3);
+            rule.deinflected = jpCheckU32(L, -1);
+            lua_rawgeti(L, r, 4);
+            jpGetStringList(L, lua_gettop(L), rule.conditions_in);
+            lua_rawgeti(L, r, 5);
+            jpGetStringList(L, lua_gettop(L), rule.conditions_out);
+            lua_settop(L, r - 1);
+            spec.rules.push_back(rule);
+        }
+        lua_settop(L, t - 1);
+        transforms.push_back(spec);
+    }
+    std::string error;
+    if ( !JpWords::setDeinflectRules(conditions, transforms, error) )
+        return luaL_error(L, "%s", error.c_str());
+    return 0;
+}
+
+// cre.jpDeinflect(text): same results as LanguageTransformer:transform() in
+// Lua: {{text=, conditions=, trace={{transform=, rule_index=, text=},...}},...},
+// with the most recently applied transform first in the trace, 1-based
+// rule_index, and conditions as signed 32-bit integers.
+static int jpDeinflect(lua_State *L) {
+    std::u32string source = jpCheckU32(L, 1);
+    std::vector<JpDeinflector::Result> results;
+    const JpDeinflector & deinflector = JpWords::getDeinflector();
+    deinflector.deinflect(source, results);
+    int n = (int)results.size();
+    // frames[i]: the trace frame of the transform that produced results[i];
+    // shared by the traces of all results derived from it, as in Lua.
+    lua_createtable(L, n, 0);
+    int frames_idx = lua_gettop(L);
+    for ( int i = 1; i < n; i++ ) {
+        const JpDeinflector::Result & r = results[i];
+        lua_createtable(L, 0, 3);
+        const std::string & id = deinflector.getTransformId(r.transform);
+        lua_pushlstring(L, id.data(), id.size());
+        lua_setfield(L, -2, "transform");
+        lua_pushinteger(L, r.rule + 1);
+        lua_setfield(L, -2, "rule_index");
+        jpPushU32(L, results[r.parent].text);
+        lua_setfield(L, -2, "text");
+        lua_rawseti(L, frames_idx, i);
+    }
+    lua_createtable(L, n, 0);
+    for ( int i = 0; i < n; i++ ) {
+        const JpDeinflector::Result & r = results[i];
+        lua_createtable(L, 0, 3);
+        jpPushU32(L, r.text);
+        lua_setfield(L, -2, "text");
+        lua_pushinteger(L, (int32_t)r.conditions);
+        lua_setfield(L, -2, "conditions");
+        lua_newtable(L);
+        int depth = 0;
+        for ( int k = i; results[k].parent >= 0; k = results[k].parent ) {
+            lua_rawgeti(L, frames_idx, k);
+            lua_rawseti(L, -2, ++depth);
+        }
+        lua_setfield(L, -2, "trace");
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+
+// cre.jpConditionFlags(list, condition_types): the flags of a list of parts
+// of speech (dictionary forms), or of any condition types when the second
+// argument is true.
+static int jpConditionFlags(lua_State *L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    std::vector<std::string> list;
+    jpGetStringList(L, 1, list);
+    const JpDeinflector & deinflector = JpWords::getDeinflector();
+    uint32_t flags = lua_toboolean(L, 2)
+        ? deinflector.getConditionFlagsFromConditionTypes(list)
+        : deinflector.getConditionFlagsFromPartsOfSpeech(list);
+    lua_pushinteger(L, (int32_t)flags);
     return 1;
 }
 
@@ -4728,6 +4886,9 @@ static const struct luaL_Reg cre_func[] = {
     {"setUserHyphenationDict", setUserHyphenationDict},
     {"getHyphenationForWord", getHyphenationForWord},
     {"softHyphenateText", softHyphenateText},
+    {"jpSetDeinflectRules", jpSetDeinflectRules},
+    {"jpDeinflect", jpDeinflect},
+    {"jpConditionFlags", jpConditionFlags},
     {"renderImageData", renderImageData},
     {"getBalancedHTML", getBalancedHTML},
     {"smoothScaleBlitBuffer", smoothScaleBlitBuffer},
