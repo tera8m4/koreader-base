@@ -3,6 +3,38 @@ require("ffi_wrapper")
 local Blitbuffer = require("ffi/blitbuffer")
 
 describe("Blitbuffer unit tests", function()
+    describe("paintStroke", function()
+        local function strokeCovers(rotation)
+            local bb = Blitbuffer.new(40, 30, Blitbuffer.TYPE_BB8)
+            bb:fill(Blitbuffer.COLOR_WHITE)
+            bb:setRotation(rotation)
+            bb:paintStroke({ 5, 5, 25, 5, 25, 20 }, 2, Blitbuffer.COLOR_BLACK)
+            -- On the path, at a corner, and away from it
+            assert.are.equal(0, bb:getPixel(15, 5):getColor8().a)
+            assert.are.equal(0, bb:getPixel(25, 12):getColor8().a)
+            assert.are.equal(0, bb:getPixel(15, 7):getColor8().a)
+            assert.are.equal(0xFF, bb:getPixel(15, 12):getColor8().a)
+            assert.are.equal(0xFF, bb:getPixel(2, 25):getColor8().a)
+        end
+
+        it("should paint a thick polyline", function()
+            strokeCovers(0)
+        end)
+
+        it("should paint in logical coordinates on rotated buffers", function()
+            strokeCovers(1)
+        end)
+
+        it("should interpolate per-point radii and clip to the buffer", function()
+            local bb = Blitbuffer.new(20, 20, Blitbuffer.TYPE_BB8)
+            bb:fill(Blitbuffer.COLOR_WHITE)
+            bb:paintStroke({ -5, 10, 25, 10 }, { 1, 5 }, Blitbuffer.COLOR_BLACK)
+            assert.are.equal(0, bb:getPixel(0, 10):getColor8().a)
+            assert.are.equal(0xFF, bb:getPixel(2, 13):getColor8().a)
+            assert.are.equal(0, bb:getPixel(19, 13):getColor8().a)
+        end)
+    end)
+
     describe("Saturation transform", function()
         it("should preserve neutral saturation exactly", function()
             local bb = Blitbuffer.new(1, 1, Blitbuffer.TYPE_BBRGB24)

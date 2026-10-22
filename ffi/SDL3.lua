@@ -253,6 +253,14 @@ local SDL_PEN_INPUT_BUTTON_1 = bit.lshift(1, 1)
 local SDL_PEN_INPUT_BUTTON_2 = bit.lshift(1, 2)
 local SDL_PEN_INPUT_ERASER_TIP = bit.lshift(1, 30)
 
+-- Opt-in stylus emulation with a mouse, for developing pen features without a tablet.
+local mouse_as_pen = os.getenv("KO_SDL_MOUSE_AS_PEN") == "1"
+local MOUSE_PEN_ID = 0 -- never a real SDL_PenID (those are non-zero); tracks as SDL_PEN_SLOT
+local MOUSE_PEN_BUTTONS = {
+    [2] = TOOL_TYPE_PEN,    -- SDL_BUTTON_MIDDLE
+    [4] = TOOL_TYPE_ERASER, -- SDL_BUTTON_X1
+}
+
 local function isMousePointer(which)
     local pointer_id = tonumber(which)
     return pointer_id ~= SDL_TOUCH_MOUSEID and pointer_id ~= SDL_PEN_MOUSEID
@@ -600,6 +608,22 @@ function S.waitForEvent(sec, usec)
         suppressMousePointersAfterPenEvent()
         endPenProximity(pen_id)
         syncPenButtons(0)
+    elseif mouse_as_pen and (event.type == SDL.SDL_EVENT_MOUSE_BUTTON_DOWN or event.type == SDL.SDL_EVENT_MOUSE_BUTTON_UP)
+        and isMousePointer(event.button.which) and MOUSE_PEN_BUTTONS[event.button.button] then
+        -- Emulated stylus (KO_SDL_MOUSE_AS_PEN=1): middle button draws, X1 erases.
+        local tool = MOUSE_PEN_BUTTONS[event.button.button]
+        local x = event.button.x * scale_x
+        local y = event.button.y * scale_y
+        if event.type == SDL.SDL_EVENT_MOUSE_BUTTON_DOWN then
+            updatePenContact(MOUSE_PEN_ID, SDL_PEN_INPUT_DOWN, tool, x, y)
+        else
+            endPenContact(MOUSE_PEN_ID, tool, x, y)
+            endPenProximity(MOUSE_PEN_ID)
+        end
+    elseif mouse_as_pen and event.type == SDL.SDL_EVENT_MOUSE_MOTION and isMousePointer(event.motion.which)
+        and pen_pointers[MOUSE_PEN_ID] and pen_pointers[MOUSE_PEN_ID].down then
+        local pointer = pen_pointers[MOUSE_PEN_ID]
+        updatePenContact(MOUSE_PEN_ID, SDL_PEN_INPUT_DOWN, pointer.tool, event.motion.x * scale_x, event.motion.y * scale_y)
     elseif event.type == SDL.SDL_EVENT_MOUSE_MOTION and shouldHandleMousePointer(event.motion.which)
         or event.type == SDL.SDL_EVENT_FINGER_MOTION then
         local is_finger = event.type == SDL.SDL_EVENT_FINGER_MOTION

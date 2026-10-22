@@ -2390,6 +2390,41 @@ static int docToScreenPoint(lua_State *L) {
 	return 0;
 }
 
+// Nearest text xpointer for a screen point (margins and gaps between lines
+// snap to the nearest line), or nil. Used to anchor stylus ink.
+static int getXPointerFromScreenPoint(lua_State *L) {
+	CreDocument *doc = (CreDocument*) luaL_checkudata(L, 1, "credocument");
+	int x = luaL_checkint(L, 2);
+	int y = luaL_checkint(L, 3);
+	ldomXPointer xp = doc->text_view->getNodeByPoint(lvPoint(x, y), false, true);
+	if (xp.isNull() || !xp.isText())
+		return 0;
+	lua_pushstring(L, UnicodeToLocal(xp.toString()).c_str());
+	return 1;
+}
+
+// Line and font metrics at an xpointer, in logical document coordinates
+// (x = inline axis, y = block axis). Returns a table or nil.
+static int getXPointerLineMetrics(lua_State *L) {
+	CreDocument *doc = (CreDocument*) luaL_checkudata(L, 1, "credocument");
+	const char *xpointer_str = luaL_checkstring(L, 2);
+	ldomXPointer xp = doc->dom_doc->createXPointer(lString32(xpointer_str));
+	LVDocView::LineMetrics m;
+	if (xp.isNull() || !doc->text_view->getLineMetrics(xp, m))
+		return 0;
+	lua_createtable(L, 0, 9);
+	lua_pushinteger(L, m.line.left);   lua_setfield(L, -2, "inline0");
+	lua_pushinteger(L, m.line.right);  lua_setfield(L, -2, "inline1");
+	lua_pushinteger(L, m.line.top);    lua_setfield(L, -2, "block0");
+	lua_pushinteger(L, m.line.bottom); lua_setfield(L, -2, "block1");
+	lua_pushinteger(L, m.block_start); lua_setfield(L, -2, "block_start");
+	lua_pushinteger(L, m.block_end);   lua_setfield(L, -2, "block_end");
+	lua_pushinteger(L, m.font_size);   lua_setfield(L, -2, "font_size");
+	lua_pushinteger(L, m.font_height); lua_setfield(L, -2, "font_height");
+	lua_pushboolean(L, m.vertical);    lua_setfield(L, -2, "vertical");
+	return 1;
+}
+
 static int getWordFromPosition(lua_State *L) {
 	CreDocument *doc = (CreDocument*) luaL_checkudata(L, 1, "credocument");
 	int x = luaL_checkint(L, 2);
@@ -3299,8 +3334,6 @@ static int getNearestWordFromPosition(lua_State *L) {
                 words.addRangeWords(*range, true);
         }
     }
-    printf("x/y %d / %d\n", x, y);
-    printf("got %d words in page\n", words.length() );
     ldomWordEx * word = words.findNearestWord(pt.x, pt.y, (MoveDirection)direction);
     if (word) {
         lua_createtable(L, 0, 3);
@@ -5090,6 +5123,8 @@ static const struct luaL_Reg credocument_meth[] = {
     {"isXPointerInDocument", isXPointerInDocument},
     {"getLinkFromPosition", getLinkFromPosition},
     {"docToScreenPoint", docToScreenPoint},
+    {"getXPointerFromScreenPoint", getXPointerFromScreenPoint},
+    {"getXPointerLineMetrics", getXPointerLineMetrics},
     {"getWordFromPosition", getWordFromPosition},
     {"getTextFromPositions", getTextFromPositions},
     {"extendXPointersToSentenceSegment", extendXPointersToSentenceSegment},

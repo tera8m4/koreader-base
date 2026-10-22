@@ -149,6 +149,8 @@ void BB_color_blit_from_RGB32(BlitBuffer * restrict dest, const BlitBuffer * res
                         unsigned int offs_x, unsigned int offs_y, unsigned int w, unsigned int h, const ColorRGB32 * restrict color);
 void BB_paint_rounded_corner(BlitBuffer * restrict bb, unsigned int off_x, unsigned int off_y, unsigned int w, unsigned int h,
                         unsigned int bw, unsigned int r, uint8_t c, int anti_alias);
+void BB_paint_stroke(BlitBuffer * restrict bb, const int * restrict xy, const uint8_t * restrict radii,
+                        unsigned int n, unsigned int radius, uint8_t v);
 ]]
 
 -- We'll load it later
@@ -2010,6 +2012,52 @@ function BB_mt.__index:paintCircle(center_x, center_y, r, c, w)
     end
     if r == w then
         self:setPixelClamped(center_x, center_y, c)
+    end
+end
+
+--[[
+paint a thick polyline with round caps and joins (e.g., stylus ink)
+
+@param xy flat array of point coordinates {x1, y1, x2, y2, ...}
+@param radius line half-width, either a number, or an array with one value per point
+@param c color value (defaults to black)
+--]]
+function BB_mt.__index:paintStroke(xy, radius, c)
+    c = c or Color8(0)
+    local n = math.floor(#xy / 2)
+    if n == 0 then return end
+    local per_point = type(radius) == "table"
+    if ffi.istype(Color8, c) and self:canUseCbb() then
+        local cxy = ffi.new("int[?]", 2 * n)
+        for i = 0, 2 * n - 1 do
+            cxy[i] = xy[i + 1]
+        end
+        local cradii
+        if per_point then
+            cradii = ffi.new("uint8_t[?]", n)
+            for i = 0, n - 1 do
+                cradii[i] = min(255, math.max(1, radius[i + 1]))
+            end
+        end
+        cblitbuffer.BB_paint_stroke(ffi.cast(P_BlitBuffer, self), cxy, cradii, n,
+            per_point and 0 or min(255, math.max(1, radius)), c:getColor8().a)
+        return
+    end
+    -- Lua fallback: stamp filled discs along each segment
+    local function radiusAt(i)
+        return per_point and radius[i] or radius
+    end
+    local px, py, pr = xy[1], xy[2], radiusAt(1)
+    self:paintCircle(px, py, pr, c)
+    for i = 2, n do
+        local nx, ny, nr = xy[2 * i - 1], xy[2 * i], radiusAt(i)
+        local dist = math.max(math.abs(nx - px), math.abs(ny - py))
+        local count = math.floor(dist / math.max(1, math.floor(min(pr, nr) / 2)))
+        for k = 1, count do
+            self:paintCircle(px + math.floor((nx - px) * k / count), py + math.floor((ny - py) * k / count),
+                pr + math.floor((nr - pr) * k / count), c)
+        end
+        px, py, pr = nx, ny, nr
     end
 end
 

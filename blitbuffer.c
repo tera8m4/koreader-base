@@ -3519,3 +3519,67 @@ void BB_paint_rounded_corner_AA(BlitBuffer * restrict bb, unsigned int off_x, un
         }
     }
 }
+
+// Stamp a filled disc as horizontal spans, clipped to the (logical) buffer.
+static void BB_stamp_disc(BlitBuffer * restrict bb, int cx, int cy, int r, uint8_t v, int bb_w, int bb_h) {
+    const int rr = r * r + r; // slightly rounder than r*r for small radii
+    for (int dy = -r; dy <= r; dy++) {
+        const int y = cy + dy;
+        if (y < 0 || y >= bb_h) {
+            continue;
+        }
+        int half = 0;
+        while ((half + 1) * (half + 1) + dy * dy <= rr) {
+            half++;
+        }
+        int x0 = cx - half;
+        int x1 = cx + half;
+        if (x0 < 0) {
+            x0 = 0;
+        }
+        if (x1 >= bb_w) {
+            x1 = bb_w - 1;
+        }
+        if (x0 <= x1) {
+            BB_fill_rect(bb, (unsigned int) x0, (unsigned int) y, (unsigned int) (x1 - x0 + 1), 1U, v);
+        }
+    }
+}
+
+// Paint a thick polyline with round caps and joins (stylus ink).
+// xy holds n points as x0,y0,x1,y1,...; radii holds one radius per point
+// (interpolated along each segment), or NULL to use radius for all points.
+void BB_paint_stroke(BlitBuffer * restrict bb, const int * restrict xy, const uint8_t * restrict radii,
+                     unsigned int n, unsigned int radius, uint8_t v) {
+    if (n == 0U) {
+        return;
+    }
+    const int bb_w = (int) BB_GET_WIDTH(bb);
+    const int bb_h = (int) BB_GET_HEIGHT(bb);
+    int px = xy[0];
+    int py = xy[1];
+    int pr = radii ? radii[0] : (int) radius;
+    BB_stamp_disc(bb, px, py, pr, v, bb_w, bb_h);
+    for (unsigned int i = 1U; i < n; i++) {
+        const int nx = xy[2U * i];
+        const int ny = xy[2U * i + 1U];
+        const int nr = radii ? radii[i] : (int) radius;
+        const int dx = nx - px;
+        const int dy = ny - py;
+        const int dist = abs(dx) > abs(dy) ? abs(dx) : abs(dy);
+        int step = (pr < nr ? pr : nr) / 2;
+        if (step < 1) {
+            step = 1;
+        }
+        const int count = dist / step;
+        for (int k = 1; k <= count; k++) {
+            BB_stamp_disc(bb, px + dx * k / count, py + dy * k / count, pr + (nr - pr) * k / count, v, bb_w, bb_h);
+        }
+        if (count == 0) {
+            BB_stamp_disc(bb, nx, ny, nr, v, bb_w, bb_h);
+        }
+        px = nx;
+        py = ny;
+        pr = nr;
+    }
+}
